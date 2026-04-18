@@ -1,0 +1,222 @@
+version: '3.8'
+
+services:
+
+  # ══════════════════════════════════════════════
+  # INFRASTRUCTURE
+  # ══════════════════════════════════════════════
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: odoru-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./.docker/init/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - odoru-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: odoru-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    networks:
+      - odoru-network
+
+  # ══════════════════════════════════════════════
+  # SPRING CLOUD
+  # ══════════════════════════════════════════════
+
+  eureka-server:
+    build:
+      context: ./infra-annuaire-eureka
+      dockerfile: Dockerfile
+    container_name: odoru-eureka
+    ports:
+      - "8761:8761"
+    environment:
+      EUREKA_HOSTNAME: eureka-server
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8761/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./infra-annuaire-eureka
+          ignore:
+            - ./infra-annuaire-eureka/target
+
+  config-server:
+    build:
+      context: ./infra-annuaire-eureka
+      dockerfile: Dockerfile
+    container_name: odoru-config-server
+    ports:
+      - "8888:8888"
+    environment:
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: config-server
+      CONFIG_GIT_URI: ${CONFIG_GIT_URI}
+      CONFIG_SEARCH_PATHS: ${CONFIG_SEARCH_PATHS:-config-repo}
+      CONFIG_GIT_BRANCH: ${CONFIG_GIT_BRANCH:-main}
+      CONFIG_BASEDIR: /tmp/config-repo
+      CONFIG_GIT_USERNAME: ${CONFIG_GIT_USERNAME}
+      CONFIG_GIT_PASSWORD: ${CONFIG_GIT_PASSWORD}
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8888/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./infra-server-config
+          ignore:
+            - ./infra-server-config/target
+
+  # ══════════════════════════════════════════════
+  # API GATEWAY
+  # ══════════════════════════════════════════════
+
+  api-gateway:
+    build:
+      context: ./infra-apiGateway
+      dockerfile: Dockerfile
+    container_name: odoru-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: api-gateway
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./infra-apiGateway
+          ignore:
+            - ./infra-apiGateway/target
+
+  # ══════════════════════════════════════════════
+  # MICROSERVICES
+  # ══════════════════════════════════════════════
+
+  user-service:
+    build:
+      context: ./ms-user
+      dockerfile: Dockerfile
+    container_name: odoru-user-service
+    ports:
+      - "8081:8081"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${MS_USER_DB:-msuser}
+      DB_USERNAME: ${MS_USER_DB_USERNAME}
+      DB_PASSWORD: ${MS_USER_DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: user-service
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 25s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ms-user
+          ignore:
+            - ./ms-user/target
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  odoru-network:
+    driver: bridge
+    name: odoru-network
