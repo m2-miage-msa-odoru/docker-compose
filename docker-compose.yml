@@ -82,7 +82,7 @@ services:
 
   config-server:
     build:
-      context: ./infra-annuaire-eureka
+      context: ./infra-server-config
       dockerfile: Dockerfile
     container_name: odoru-config-server
     ports:
