@@ -1,11 +1,9 @@
 version: '3.8'
 
 services:
-
   # ══════════════════════════════════════════════
   # INFRASTRUCTURE
   # ══════════════════════════════════════════════
-
   postgres:
     image: postgres:16-alpine
     container_name: odoru-postgres
@@ -17,9 +15,27 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./.docker/init/postgres:/docker-entrypoint-initdb.d
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-postgres}" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - odoru-network
+
+  mongo:
+    image: mongo:7
+    container_name: odoru-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: cours_db
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -169,8 +185,9 @@ services:
       dockerfile: Dockerfile
     container_name: odoru-user-service
     ports:
-      - "8081:8081"
+      - "8081:8080"
     environment:
+      SPRING_PROFILES_ACTIVE: docker
       DB_URL: jdbc:postgresql://postgres:5432/${MS_USER_DB:-msuser}
       DB_USERNAME: ${MS_USER_DB_USERNAME}
       DB_PASSWORD: ${MS_USER_DB_PASSWORD}
@@ -196,7 +213,7 @@ services:
       config-server:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -206,14 +223,75 @@ services:
     develop:
       watch:
         - action: rebuild
-          path: ./ms-user
+          path: ./ms-user/src/main/java
           ignore:
             - ./ms-user/target
+        - action: rebuild
+          path: ./ms-user/src/main/resources
+          ignore:
+            - ./ms-user/target
+        - action: rebuild
+          path: ./ms-user/pom.xml
+
+  cours-service:
+    build:
+      context: ./ms-cours
+      dockerfile: Dockerfile
+    container_name: odoru-cours-service
+    ports:
+      - "8082:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      MONGO_URI: mongodb://mongo:27017/cours_db
+      MONGO_DB: cours_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: cours-service
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 25s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ms-cours/src/main/java
+          ignore:
+            - ./ms-cours/target
+        - action: rebuild
+          path: ./ms-cours/src/main/resources
+          ignore:
+            - ./ms-cours/target
+        - action: rebuild
+          path: ./ms-cours/pom.xml
 
 volumes:
   postgres_data:
     driver: local
   rabbitmq_data:
+    driver: local
+  mongo_data:
     driver: local
 
 networks:
