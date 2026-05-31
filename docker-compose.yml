@@ -98,7 +98,7 @@ services:
 
   config-server:
     build:
-      context: ./infra-server-config
+      context: ./infra-config-server
       dockerfile: Dockerfile
     container_name: odoru-config-server
     ports:
@@ -131,9 +131,9 @@ services:
     develop:
       watch:
         - action: rebuild
-          path: ./infra-server-config
+          path: ./infra-config-server
           ignore:
-            - ./infra-server-config/target
+            - ./infra-config-server/target
 
   # ══════════════════════════════════════════════
   # API GATEWAY
@@ -141,7 +141,7 @@ services:
 
   api-gateway:
     build:
-      context: ./infra-apiGateway
+      context: ./infra-apiGatway
       dockerfile: Dockerfile
     container_name: odoru-gateway
     ports:
@@ -171,9 +171,9 @@ services:
     develop:
       watch:
         - action: rebuild
-          path: ./infra-apiGateway
+          path: ./infra-apiGatway
           ignore:
-            - ./infra-apiGateway/target
+            - ./infra-apiGatway/target
 
   # ══════════════════════════════════════════════
   # MICROSERVICES
@@ -185,7 +185,7 @@ services:
       dockerfile: Dockerfile
     container_name: odoru-user-service
     ports:
-      - "8081:8080"
+      - "8081:8081"
     environment:
       SPRING_PROFILES_ACTIVE: docker
       DB_URL: jdbc:postgresql://postgres:5432/${MS_USER_DB:-msuser}
@@ -213,7 +213,7 @@ services:
       config-server:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -285,6 +285,52 @@ services:
             - ./ms-cours/target
         - action: rebuild
           path: ./ms-cours/pom.xml
+
+  composite-service:
+    build:
+      context: ./ms-composite
+      dockerfile: Dockerfile
+    container_name: odoru-composite-service
+    ports:
+      - "8083:8083"
+    environment:
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: composite-service
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      cours-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 25s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ms-composite/rest-api-composite/src
+          ignore:
+            - ./ms-composite/rest-api-composite/target
+        - action: rebuild
+          path: ./ms-composite/server-composite/src
+          ignore:
+            - ./ms-composite/server-composite/target
+        - action: rebuild
+          path: ./ms-composite/pom.xml
 
 volumes:
   postgres_data:
