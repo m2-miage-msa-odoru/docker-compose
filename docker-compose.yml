@@ -184,8 +184,8 @@ services:
       context: ./ms-user
       dockerfile: Dockerfile
     container_name: odoru-user-service
-    ports:
-      - "8081:8081"
+    # Pas de mapping de port : accès uniquement via l'api-gateway (lb://user-service)
+    # Le port 8081 reste accessible aux autres conteneurs du réseau odoru-network
     environment:
       SPRING_PROFILES_ACTIVE: docker
       DB_URL: jdbc:postgresql://postgres:5432/${MS_USER_DB:-msuser}
@@ -238,8 +238,8 @@ services:
       context: ./ms-cours
       dockerfile: Dockerfile
     container_name: odoru-cours-service
-    ports:
-      - "8082:8080"
+    # Pas de mapping de port : accès uniquement en interne (utilisé par composite-service)
+    # Si tu veux un accès externe via gateway, ajoute une route /api/cours/** dans api-gateway
     environment:
       SPRING_PROFILES_ACTIVE: docker
       MONGO_URI: mongodb://mongo:27017/cours_db
@@ -291,8 +291,8 @@ services:
       context: ./ms-composite
       dockerfile: Dockerfile
     container_name: odoru-composite-service
-    ports:
-      - "8083:8083"
+    # Pas de mapping de port : accès uniquement via l'api-gateway (lb://composite-service)
+    # Le port 8083 reste accessible aux autres conteneurs du réseau odoru-network
     environment:
       EUREKA_URL: http://eureka-server:8761/eureka/
       EUREKA_HOSTNAME: composite-service
