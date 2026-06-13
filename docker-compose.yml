@@ -286,6 +286,58 @@ services:
         - action: rebuild
           path: ./ms-cours/pom.xml
 
+  competition-service:
+    build:
+      context: ./ms-competition
+      dockerfile: Dockerfile
+    container_name: odoru-competition-service
+    # Pas de mapping de port : accès via la gateway (/api/competitions/**) ou en interne (composite-service)
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      MONGO_URI: mongodb://mongo:27017/competition_db
+      MONGO_DB: competition_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: competition-service
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 25s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ms-competition/rest-api-competition/src
+          ignore:
+            - ./ms-competition/rest-api-competition/target
+        - action: rebuild
+          path: ./ms-competition/server-competition/src
+          ignore:
+            - ./ms-competition/server-competition/target
+        - action: rebuild
+          path: ./ms-competition/pom.xml
+
   composite-service:
     build:
       context: ./ms-composite
@@ -310,6 +362,8 @@ services:
       user-service:
         condition: service_healthy
       cours-service:
+        condition: service_healthy
+      competition-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/actuator/health || exit 1"]
