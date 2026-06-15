@@ -25,15 +25,56 @@ services:
     networks:
       - odoru-network
 
-  mongo:
+  # Base PostgreSQL DÉDIÉE au service ms-badge (isolation base-par-service)
+  postgres-badge:
+    image: postgres:16-alpine
+    container_name: odoru-postgres-badge
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${MS_BADGE_DB_USERNAME:-badge}
+      POSTGRES_PASSWORD: ${MS_BADGE_DB_PASSWORD:-badge}
+      POSTGRES_DB: ${MS_BADGE_DB:-msbadge}
+    volumes:
+      - postgres_badge_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${MS_BADGE_DB_USERNAME:-badge} -d ${MS_BADGE_DB:-msbadge}" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - odoru-network
+
+  # Instance MongoDB DÉDIÉE à ms-cours (ne contient que cours_db)
+  mongo-cours:
     image: mongo:7
-    container_name: odoru-mongo
+    container_name: odoru-mongo-cours
     ports:
       - "27017:27017"
     environment:
       MONGO_INITDB_DATABASE: cours_db
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - odoru-network
+
+  # Instance MongoDB DÉDIÉE à ms-competition (ne contient que competition_db)
+  mongo-competition:
+    image: mongo:7
+    container_name: odoru-mongo-competition
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_DATABASE: competition_db
+    volumes:
+      - mongo_competition_data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -242,7 +283,7 @@ services:
     # Si tu veux un accès externe via gateway, ajoute une route /api/cours/** dans api-gateway
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      MONGO_URI: mongodb://mongo:27017/cours_db
+      MONGO_URI: mongodb://mongo-cours:27017/cours_db
       MONGO_DB: cours_db
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
@@ -257,7 +298,7 @@ services:
         -Dspring.jmx.enabled=false
         -Dspring.main.lazy-initialization=true
     depends_on:
-      mongo:
+      mongo-cours:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -294,7 +335,7 @@ services:
     # Pas de mapping de port : accès via la gateway (/api/competitions/**) ou en interne (composite-service)
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      MONGO_URI: mongodb://mongo:27017/competition_db
+      MONGO_URI: mongodb://mongo-competition:27017/competition_db
       MONGO_DB: competition_db
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
@@ -309,7 +350,7 @@ services:
         -Dspring.jmx.enabled=false
         -Dspring.main.lazy-initialization=true
     depends_on:
-      mongo:
+      mongo-competition:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -338,6 +379,53 @@ services:
         - action: rebuild
           path: ./ms-competition/pom.xml
 
+  badge-service:
+    build:
+      context: ./ms-badge
+      dockerfile: Dockerfile
+    container_name: odoru-badge-service
+    # Pas de mapping de port : accès via la gateway (/api/badges/**) ou en interne (composite-service)
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_URL: jdbc:postgresql://postgres-badge:5432/${MS_BADGE_DB:-msbadge}
+      DB_USERNAME: ${MS_BADGE_DB_USERNAME:-badge}
+      DB_PASSWORD: ${MS_BADGE_DB_PASSWORD:-badge}
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: badge-service
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      postgres-badge:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8084/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 25s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ms-badge/rest-api-badge/src
+          ignore:
+            - ./ms-badge/rest-api-badge/target
+        - action: rebuild
+          path: ./ms-badge/server-badge/src
+          ignore:
+            - ./ms-badge/server-badge/target
+        - action: rebuild
+          path: ./ms-badge/pom.xml
+
   composite-service:
     build:
       context: ./ms-composite
@@ -365,6 +453,8 @@ services:
         condition: service_healthy
       competition-service:
         condition: service_healthy
+      badge-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/actuator/health || exit 1"]
       interval: 5s
@@ -389,9 +479,13 @@ services:
 volumes:
   postgres_data:
     driver: local
+  postgres_badge_data:
+    driver: local
   rabbitmq_data:
     driver: local
   mongo_data:
+    driver: local
+  mongo_competition_data:
     driver: local
 
 networks:
