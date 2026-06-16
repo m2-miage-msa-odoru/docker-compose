@@ -84,6 +84,25 @@ services:
     networks:
       - odoru-network
 
+  # Instance MongoDB DÉDIÉE à ms-stats (modèle de lecture des statistiques)
+  mongo-stats:
+    image: mongo:7
+    container_name: odoru-mongo-stats
+    ports:
+      - "27019:27017"
+    environment:
+      MONGO_INITDB_DATABASE: stats_db
+    volumes:
+      - mongo_stats_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - odoru-network
+
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: odoru-rabbitmq
@@ -390,6 +409,10 @@ services:
       DB_URL: jdbc:postgresql://postgres-badge:5432/${MS_BADGE_DB:-msbadge}
       DB_USERNAME: ${MS_BADGE_DB_USERNAME:-badge}
       DB_PASSWORD: ${MS_BADGE_DB_PASSWORD:-badge}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       EUREKA_URL: http://eureka-server:8761/eureka/
       EUREKA_HOSTNAME: badge-service
       CONFIG_SERVER_URL: http://config-server:8888
@@ -400,6 +423,8 @@ services:
         -Dspring.main.lazy-initialization=true
     depends_on:
       postgres-badge:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       eureka-server:
         condition: service_healthy
@@ -455,6 +480,8 @@ services:
         condition: service_healthy
       badge-service:
         condition: service_healthy
+      stats-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/actuator/health || exit 1"]
       interval: 5s
@@ -476,6 +503,58 @@ services:
         - action: rebuild
           path: ./ms-composite/pom.xml
 
+  stats-service:
+    build:
+      context: ./ms-stats
+      dockerfile: Dockerfile
+    container_name: odoru-stats-service
+    # Pas de mapping de port : accès uniquement via composite (qui vérifie le rôle PRESIDENT)
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      MONGO_URI: mongodb://mongo-stats:27017/stats_db
+      MONGO_DB: stats_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      EUREKA_HOSTNAME: stats-service
+      CONFIG_SERVER_URL: http://config-server:8888
+      JAVA_OPTS: >-
+        -XX:TieredStopAtLevel=1
+        -Xms128m -Xmx256m
+        -Dspring.jmx.enabled=false
+        -Dspring.main.lazy-initialization=true
+    depends_on:
+      mongo-stats:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 25s
+    networks:
+      - odoru-network
+    develop:
+      watch:
+        - action: rebuild
+          path: ./ms-stats/rest-api-stats/src
+          ignore:
+            - ./ms-stats/rest-api-stats/target
+        - action: rebuild
+          path: ./ms-stats/server-stats/src
+          ignore:
+            - ./ms-stats/server-stats/target
+        - action: rebuild
+          path: ./ms-stats/pom.xml
+
 volumes:
   postgres_data:
     driver: local
@@ -486,6 +565,8 @@ volumes:
   mongo_data:
     driver: local
   mongo_competition_data:
+    driver: local
+  mongo_stats_data:
     driver: local
 
 networks:
